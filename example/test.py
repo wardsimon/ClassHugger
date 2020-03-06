@@ -1,8 +1,11 @@
 __author__ = 'github.com/wardsimon'
 __version__ = '0.0.1'
 
-from ClassHugger import ClassHugger
+#   Licensed under the GNU General Public License v3.0
+#   Copyright (c) of the author (github.com/wardsimon)
+#   Created: 6/3/2020.
 
+from ClassHugger import ClassHugger
 
 class Foo:
 
@@ -32,13 +35,24 @@ class Foo:
     def ran(self, name='ban'):
         return name
 
+    @classmethod
+    def default(cls, value):
+        obj = cls()
+        obj._a = value
+        return obj
+
+    @staticmethod
+    def can():
+        return 'TEXT'
+
 
 if __name__ == '__main__':
 
     print('# Run file\n')
 
-    hugger = ClassHugger()
+    hugger = ClassHugger(debug=True)
     Foo = hugger.hug(Foo)
+
     boo = Foo()
     boo.bar()
     value = boo.bam
@@ -49,6 +63,12 @@ if __name__ == '__main__':
     value = boo.man(2)
     value = boo.ran()
     value = boo.ran(name='fan')
+
+    boo2 = Foo.default(3)
+    can = boo2.can()
+
+    d = dict()
+    boo2.bam = boo
 
     script = hugger.makeScript()
 
