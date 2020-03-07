@@ -1,4 +1,6 @@
 
 .idea/
 
-ClassHugger/__pycache__/
+hugger/__pycache__/
+
+.DS_Store

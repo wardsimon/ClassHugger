@@ -5,7 +5,7 @@ __version__ = '0.0.1'
 #   Copyright (c) of the author (github.com/wardsimon)
 #   Created: 6/3/2020.
 
-from ClassHugger import ClassHugger
+from hugger import ClassHugger
 
 class Foo:
 
