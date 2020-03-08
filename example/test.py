@@ -71,10 +71,11 @@ if __name__ == '__main__':
     boo2 = Foo.default(3)
     can = boo2.can()
 
-    d = dict()
     boo2.bam = boo
 
-    boo2.maker()
+    d = boo2.bam
+
+    v = boo2.maker()
 
     script = hugger.makeScript()
 
