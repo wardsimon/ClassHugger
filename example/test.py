@@ -45,12 +45,16 @@ class Foo:
     def can():
         return 'TEXT'
 
+    def maker(self):
+        self.bar()
+        pass
+
 
 if __name__ == '__main__':
 
     print('# Run file\n')
 
-    hugger = ClassHugger(debug=True)
+    hugger = ClassHugger(debug=False)
     Foo = hugger.hug(Foo)
 
     boo = Foo()
@@ -69,6 +73,8 @@ if __name__ == '__main__':
 
     d = dict()
     boo2.bam = boo
+
+    boo2.maker()
 
     script = hugger.makeScript()
 

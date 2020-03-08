@@ -3,7 +3,10 @@
 #   Created: 5/3/2020.
 
 __author__ = 'github.com/wardsimon'
-__version__ = '0.0.1'
+__version__ = '0.0.2'
+
+import inspect
+import sys
 
 from functools import wraps
 from typing import Callable
@@ -115,29 +118,41 @@ class ClassHugger:
             @wraps(fun)
             def inner(*args, **kwargs):
                 self._argument_checker(*args, **kwargs)
+                caller = self.caller_name(skip=1)
+                skip = False
+                if klass.__name__ in caller:
+                    if self.debug:
+                        print(f"I've been called from {caller}")
+                    skip = True
+
                 if name != 'patch_init':
                     if self.debug:
                         print(f"I''m {args[0]}.{name} and have been called with {args[1:]}, {kwargs}")
                     if isinstance(fun, (classmethod, staticmethod)):
                         if isinstance(fun, classmethod):
                             res = getattr(fun, '__func__')(klass, *args, **kwargs)
+                            if skip:
+                                return res
                             self.__count -= 1
                             ret = _argout(res)
                             self.__history[-1] = self._makeScriptEntry(klass, 'magic_method', *[name, *args[1:]],
                                                                         returns=ret, index=self.__count, **kwargs)
                         else:
                             res = getattr(fun, '__func__')(*args[1:], **kwargs)
+                            if skip:
+                                return res
                             ret = _argout(res)
                             self.__history.append(self._makeScriptEntry(klass, 'magic_method', *[name, *args[1:]],
                                                                        returns=ret, index=self.__count, **kwargs))
                     else:
                         res = fun(*args, **kwargs)
+                        if skip:
+                            return res
                         ret = _argout(res)
                         self.__history.append(self._makeScriptEntry(klass, 'fn_call', *[args[0], name, *args[1:]],
                                                                     returns=ret, **kwargs))
                     return res
                 return fun(*args, **kwargs)
-
             return inner
 
         def get_wrapper(fun):
@@ -340,7 +355,7 @@ class ClassHugger:
                     temp += f'{self.__var_ident}{index}'
                 else:
                     if isinstance(call_variables, str):
-                        var = '"' + call_variables + '"'
+                        call_variables = '"' + call_variables + '"'
                     temp += f'{call_variables}'
                 temp += '\n'
                 return temp
@@ -375,3 +390,46 @@ class ClassHugger:
         if isinstance(arg, (int, float, complex, str, tuple, frozenset, bytes)):
             ret = False
         return ret
+
+    @staticmethod
+    def caller_name(skip=2):
+        """Get a name of a caller in the format module.class.method
+
+           `skip` specifies how many levels of stack to skip while getting caller
+           name. skip=1 means "who calls me", skip=2 "who calls my caller" etc.
+
+           An empty string is returned if skipped levels exceed stack height
+
+           https://gist.github.com/techtonik/2151727#gistcomment-2333747
+        """
+
+        def stack_(frame):
+            framelist = []
+            while frame:
+                framelist.append(frame)
+                frame = frame.f_back
+            return framelist
+
+        stack = stack_(sys._getframe(1))
+        start = 0 + skip
+        if len(stack) < start + 1:
+            return ''
+        parentframe = stack[start]
+
+        name = []
+        module = inspect.getmodule(parentframe)
+        # `modname` can be None when frame is executed directly in console
+        # TODO(techtonik): consider using __main__
+        if module:
+            name.append(module.__name__)
+        # detect classname
+        if 'self' in parentframe.f_locals:
+            # I don't know any way to detect call from the object method
+            # XXX: there seems to be no way to detect static method call - it will
+            #      be just a function call
+            name.append(parentframe.f_locals['self'].__class__.__name__)
+        codename = parentframe.f_code.co_name
+        if codename != '<module>':  # top level usually
+            name.append(codename)  # function or a method
+        del parentframe
+        return ".".join(name)
