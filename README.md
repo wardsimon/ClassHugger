@@ -4,6 +4,6 @@
 
 ## About
 
-This little module allows you to mock calls to a class and generate a python script from called actions.
+This little module intercepts calls to classes, methods and functions and can be used to generate a python script from previous actions.
 
-Go on, show that class some love
+Go on, show those Python objects some love!
