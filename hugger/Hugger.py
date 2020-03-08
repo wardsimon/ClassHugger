@@ -27,25 +27,24 @@ class BaseHugger:
 
     def _argument_checker(self, *args, **kwargs):
         for arg in args:
-            if self.__ismutalbe(arg):
+            if self.__is_mutable(arg):
                 if id(arg) not in self._unique_rets and \
                         id(arg) not in self._create_list and \
                         id(arg) not in self._unique_vars:
                     self._unique_vars.append(id(arg))
         for item in kwargs.values():
-            if self.__ismutalbe(item):
+            if self.__is_mutable(item):
                 if id(item) not in self._unique_rets and \
                         id(item) not in self._create_list and \
                         id(item) not in self._unique_vars:
                     self._unique_vars.append(id(item))
 
     @staticmethod
-    def __ismutalbe(arg):
+    def __is_mutable(arg):
         ret = True
         if isinstance(arg, (int, float, complex, str, tuple, frozenset, bytes)):
             ret = False
         return ret
-
 
     def _argout(self, result):
         if result is None:
@@ -53,14 +52,14 @@ class BaseHugger:
         else:
             if isinstance(result, tuple):
                 for res in result:
-                    if self.__ismutalbe(res):
+                    if self.__is_mutable(res):
                         if id(res) not in self._unique_rets and \
                                 id(res) not in self._create_list and \
                                 id(res) not in self._unique_vars:
                             self._unique_rets.append(id(res))
                 ret = len(result)
             else:
-                if self.__ismutalbe(result):
+                if self.__is_mutable(result):
                     if id(result) not in self._unique_rets and \
                             id(result) not in self._create_list and \
                             id(result) not in self._unique_vars:
@@ -129,7 +128,7 @@ class BaseHugger:
         elif call_type == 'prop_set':
             call_obj = args[0]
             call_prop = args[1]
-            if BaseHugger.__ismutalbe(args[2]):
+            if BaseHugger.__is_mutable(args[2]):
                 call_variables = id(args[2])
             else:
                 call_variables = args[2]
