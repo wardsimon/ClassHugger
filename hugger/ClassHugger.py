@@ -25,6 +25,7 @@ class ClassHugger:
         self._old_set_attr = None
         self._old_get_attr = None
         self.__var_ident = 'var_'
+        self.__ret_ident = 'obj_'
 
     def hug(self, klass):
         old_init = klass.__init__
@@ -36,7 +37,7 @@ class ClassHugger:
                 print(f"{klass.__name__} is created with {args}, {kwargs}")
             self.__history.append(self._makeScriptEntry(klass, 'create_obj', *args, index=self.__count, **kwargs))
             old_init(obj, *args, **kwargs)
-            self.__create_list.append([self.__count, obj])
+            self.__create_list.append(id(obj))
             self.__count += 1
             new_props = self._auto_props.symmetric_difference(set(klass.__dict__.keys()))
             if new_props:
@@ -100,11 +101,20 @@ class ClassHugger:
             if result is None:
                 ret = 0
             else:
-                if result not in self.__unique_rets:
-                    self.__unique_rets.append(result)
                 if isinstance(result, tuple):
+                    for res in result:
+                        if self.__ismutalbe(res):
+                            if id(res) not in self.__unique_rets and \
+                                    id(res) not in self.__create_list and \
+                                    id(res) not in self.__unique_vars:
+                                self.__unique_rets.append(id(res))
                     ret = len(result)
                 else:
+                    if self.__ismutalbe(result):
+                        if id(result) not in self.__unique_rets and \
+                                id(result) not in self.__create_list and \
+                                id(result) not in self.__unique_vars:
+                            self.__unique_rets.append(id(result))
                     ret = 1
             return ret
 
@@ -222,7 +232,10 @@ class ClassHugger:
         elif call_type == 'prop_set':
             call_obj = args[0]
             call_prop = args[1]
-            call_variables = args[2]
+            if ClassHugger.__ismutalbe(args[2]):
+                call_variables = id(args[2])
+            else:
+                call_variables = args[2]
         elif call_type == 'prop_get':
             call_obj = args[0]
             call_prop = args[1]
@@ -255,11 +268,15 @@ class ClassHugger:
             class_obj_name = class_obj.lower()
 
             if call_type == 'create_obj':
+                # No need for name checking on creator.
                 temp = f'{class_obj_name}_{create_index} = {class_obj}('
                 for var in call_variables[0]:
                     if var in self.__unique_vars:
                         index = self.__unique_vars.index(var)
                         temp += f'{self.__var_ident}{index}, '
+                    elif var in self.__unique_rets:
+                        index = self.__unique_rets.index(var)
+                        temp += f'{self.__ret_ident}{index}, '
                     else:
                         if isinstance(var, str):
                             var = '"' + var + '"'
@@ -273,6 +290,9 @@ class ClassHugger:
                     if item in self.__unique_vars:
                         index = self.__unique_vars.index(item)
                         temp += f'{key}={self.__var_ident}{index}, '
+                    elif item in self.__unique_rets:
+                        index = self.__unique_rets.index(item)
+                        temp += f'{key}={self.__ret_ident}{index}, '
                     else:
                         if isinstance(item, str):
                             item = '"' + item + '"'
@@ -289,6 +309,9 @@ class ClassHugger:
                     if var in self.__unique_vars:
                         index = self.__unique_vars.index(var)
                         temp += f'{self.__var_ident}{index}, '
+                    elif var in self.__unique_rets:
+                        index = self.__unique_rets.index(var)
+                        temp += f'{self.__ret_ident}{index}, '
                     else:
                         if isinstance(var, str):
                             var = '"' + var + '"'
@@ -302,6 +325,9 @@ class ClassHugger:
                     if item in self.__unique_vars:
                         index = self.__unique_vars.index(item)
                         temp += f'{key}={self.__var_ident}{index}, '
+                    elif item in self.__unique_rets:
+                        index = self.__unique_rets.index(item)
+                        temp += f'{key}={self.__ret_ident}{index}, '
                     else:
                         if isinstance(item, str):
                             item = '"' + item + '"'
@@ -312,8 +338,7 @@ class ClassHugger:
                 temp += ')\n'
                 return temp
 
-            objs = [obj[1] for obj in self.__create_list]
-            idx = objs.index(call_obj)
+            idx = self.__create_list.index(id(call_obj))
             if call_type == 'fn_call':
                 temp = ''
                 for i in range(returns):
@@ -326,6 +351,9 @@ class ClassHugger:
                     if var in self.__unique_vars:
                         index = self.__unique_vars.index(var)
                         temp += f'{self.__var_ident}{index}, '
+                    elif var in self.__unique_rets:
+                        index = self.__unique_rets.index(var)
+                        temp += f'{self.__ret_ident}{index}, '
                     else:
                         if isinstance(var, str):
                             var = '"' + var + '"'
@@ -339,6 +367,9 @@ class ClassHugger:
                     if item in self.__unique_vars:
                         index = self.__unique_vars.index(item)
                         temp += f'{key}={self.__var_ident}{index}, '
+                    elif item in self.__unique_rets:
+                        index = self.__unique_rets.index(item)
+                        temp += f'{key}={self.__ret_ident}{index}, '
                     else:
                         if isinstance(item, str):
                             item = '"' + item + '"'
@@ -350,23 +381,30 @@ class ClassHugger:
                 return temp
             elif call_type == 'prop_set':
                 temp = f'{class_obj_name}_{idx}.{call_prop} = '
-                if call_variables in self.__unique_vars:
-                    index = self.__unique_vars.index(call_variables)
-                    temp += f'{self.__var_ident}{index}'
+                if call_variables in self.__create_list:
+                    index = self.__create_list.index(call_variables)
+                    temp += f'{class_obj_name}_{index}'
                 else:
-                    if isinstance(call_variables, str):
-                        call_variables = '"' + call_variables + '"'
-                    temp += f'{call_variables}'
+                    if call_variables in self.__unique_vars:
+                        index = self.__unique_vars.index(call_variables)
+                        temp += f'{self.__var_ident}{index}'
+                    elif call_variables in self.__unique_rets:
+                        index = self.__unique_rets.index(call_variables)
+                        temp += f'{self.__ret_ident}{index}'
+                    else:
+                        if isinstance(call_variables, str):
+                            call_variables = '"' + call_variables + '"'
+                        temp += f'{call_variables}'
                 temp += '\n'
                 return temp
             elif call_type == 'prop_get':
                 temp = ''
                 for i in range(returns):
-                    temp += f'value_{i}, '
+                    temp += f'{self.__ret_ident}{i}, '
                 if returns > 0:
                     temp = temp[:-2]
                     temp += ' = '
-                temp += f'obj_{idx}.{call_prop}\n'
+                temp += f'{class_obj_name}_{idx}.{call_prop}\n'
                 return temp
 
         text = '# Auto generated script\n\n'
@@ -377,12 +415,16 @@ class ClassHugger:
     def _argument_checker(self, *args, **kwargs):
         for arg in args:
             if self.__ismutalbe(arg):
-                if arg not in self.__unique_vars:
-                    self.__unique_vars.append(arg)
+                if id(arg) not in self.__unique_rets and \
+                        id(arg) not in self.__create_list and \
+                        id(arg) not in self.__unique_vars:
+                    self.__unique_vars.append(id(arg))
         for item in kwargs.values():
             if self.__ismutalbe(item):
-                if item not in self.__unique_vars:
-                    self.__unique_vars.append(item)
+                if id(item) not in self.__unique_rets and \
+                        id(item) not in self.__create_list and \
+                        id(item) not in self.__unique_vars:
+                    self.__unique_vars.append(id(item))
 
     @staticmethod
     def __ismutalbe(arg):

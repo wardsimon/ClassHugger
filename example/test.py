@@ -47,7 +47,7 @@ class Foo:
 
     def maker(self):
         self.bar()
-        pass
+        return dict()
 
 
 if __name__ == '__main__':
