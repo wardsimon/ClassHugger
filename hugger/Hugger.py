@@ -38,10 +38,9 @@ class HuggerStack:
         self._unique_args = []
         self._unique_rets = []
         self._var_ident = 'var_'
-        self.__ret_ident = 'obj_'
+        self._ret_ident = 'obj_'
 
     def patch_class(self, klass):
-        # patcher_methods_pre = HugMethods(self, klass)
         patcher_init = HugInit(self, klass)
         patcher_getter_setter = HugGetSet(self, klass)
         self.hugged.append(HuggerEntries(klass, [patcher_init, patcher_getter_setter]))
