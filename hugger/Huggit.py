@@ -7,7 +7,7 @@ __version__ = 'v0.0.1'
 
 import inspect
 import sys
-from typing import NoReturn, Tuple
+from typing import Tuple
 from collections.abc import Callable
 from abc import ABCMeta, abstractmethod
 from functools import wraps
@@ -65,14 +65,14 @@ class PatcherFactory(metaclass=ABCMeta):
         pass
 
     @staticmethod
-    def is_mutable(arg):
+    def is_mutable(arg) -> bool:
         ret = True
-        if isinstance(arg, (int, float, complex, str, tuple, frozenset, bytes)):
+        if isinstance(arg, (int, float, complex, str, tuple, frozenset, bytes, property)):
             ret = False
         return ret
 
     @staticmethod
-    def _caller_name(skip=2):
+    def _caller_name(skip: int = 2):
         """Get a name of a caller in the format module.class.method
 
            `skip` specifies how many levels of stack to skip while getting caller
@@ -133,7 +133,7 @@ class PatcherFactory(metaclass=ABCMeta):
         if this_id not in self._store.create_list:
             self._store.create_list.append(this_id)
 
-    def _append_result(self, result):
+    def _append_result(self, result) -> int:
         ret = 0
 
         def check(res):
@@ -156,8 +156,8 @@ class PatcherFactory(metaclass=ABCMeta):
             ret = 1
         return ret
 
-    def _append_log(self, log_str):
-        self._store.log.append(log_str)
+    def _append_log(self, log_entry: str):
+        self._store.log.append(log_entry)
 
     def __options(self, item) -> Tuple[int, dict]:
         this_id = id(item)
@@ -168,7 +168,7 @@ class PatcherFactory(metaclass=ABCMeta):
         }
         return this_id, option
 
-    def _get_position(self, query: str, item):
+    def _get_position(self, query: str, item) -> int:
         this_id, option = self.__options(item)
         in_list = self._in_list(query, item)
         index = None
@@ -176,14 +176,31 @@ class PatcherFactory(metaclass=ABCMeta):
             index = option.get(query).index(this_id)
         return index
 
-    def _in_list(self, query: str, item):
+    def _in_list(self, query: str, item) -> bool:
         this_id, option = self.__options(item)
         return this_id in option.get(query, [])
+
+    @staticmethod
+    def _get_class_that_defined_method(method_in) -> classmethod:
+        if inspect.ismethod(method_in):
+            for cls in inspect.getmro(method_in.__self__.__class__):
+                if cls.__dict__.get(method_in.__name__) is method_in:
+                    return cls
+            method_in = method_in.__func__  # fallback to __qualname__ parsing
+        if inspect.isfunction(method_in):
+            class_name = method_in.__qualname__.split('.<locals>', 1)[0].rsplit('.', 1)[0]
+            try:
+                cls = getattr(inspect.getmodule(method_in), class_name)
+            except AttributeError:
+                cls = method_in.__globals__.get(class_name)
+            if isinstance(cls, type):
+                return cls
+        return None  # not required since None would have been implicitly returned anyway
 
 
 class ClassInitHugger(PatcherFactory):
 
-    def __init__(self, klass):
+    def __init__(self, klass: classmethod):
         super().__init__()
         self.klass = klass
         self.old_init = klass.__init__
@@ -259,26 +276,22 @@ class ClassInitHugger(PatcherFactory):
         return temp
 
 
-class ClassFunctionHugger(PatcherFactory):
+class FunctionHugger(PatcherFactory):
 
-    def __init__(self, func):
+    def __init__(self, func: callable):
         super().__init__()
         self.func = func
         self.func_name = func.__name__
-        self.in_main = False
-        self.klass = getattr(inspect.getmodule(func), func.__qualname__.split('.<locals>', 1)[0].rsplit('.', 1)[0])
-        if self.klass == self.func:
-            # We are in __main__
-            self.in_main = True
+        self.klass = self._get_class_that_defined_method(func)
 
     def patch(self):
-        if self.in_main:
+        if self.klass is None:
             self.func.__globals__[self.func_name] = self.patch_function()
         else:
             setattr(self.klass, self.func_name, self.patch_function())
 
     def restore(self):
-        if self.in_main:
+        if self.klass is None:
             self.func.__globals__[self.func_name] = self.func
         else:
             setattr(self.klass, self.func_name, self.func)
@@ -293,7 +306,7 @@ class ClassFunctionHugger(PatcherFactory):
         if len(returns) > 0:
             temp = temp[:-2]
             temp += ' = '
-        if self.in_main:
+        if self.klass is None:
             temp += f'{self.func_name}('
         else:
             index = self._get_position("create_list", args[0])
@@ -315,9 +328,9 @@ class ClassFunctionHugger(PatcherFactory):
                 temp += f'{var}, '
         if len(args) > 0:
             temp = temp[:-2]
-        temp_i = 0
+        first_item = True
         for key, item in kwargs.items():
-            if temp_i == 0 & len(args) > 0:
+            if first_item & len(args) > 0:
                 temp += ', '
             if self._in_list('input_list', item):
                 index = self._get_position("input_list", item)
@@ -332,7 +345,7 @@ class ClassFunctionHugger(PatcherFactory):
                 if isinstance(item, str):
                     item = '"' + item + '"'
                 temp += f'{key}={item}, '
-            temp_i += 1
+            first_item = False
         if kwargs:
             temp = temp[:-2]
         temp += ')'
@@ -343,7 +356,7 @@ class ClassFunctionHugger(PatcherFactory):
         def inner(*args, **kwargs):
             caller = self._caller_name(skip=1)
             skip = False
-            if self.klass.__name__ in caller:
+            if self.klass is not None and self.klass.__name__ in caller:
                 skip = True
             if self.debug:
                 if len(args) > 0:
@@ -356,11 +369,109 @@ class ClassFunctionHugger(PatcherFactory):
                 self._append_result(res)
                 self._append_log(self.makeEntry(res, *args, **kwargs))
             return res
+
         setattr(inner, 'hugger', self)
         return inner
 
+
+class PropertyHugger(PatcherFactory):
+    # Properties are immutable, so need to be set at the parent level. However unlike `FunctionHugger` we can't traverse
+    # the stack to get the parent. So, it and it's name has to be set at initialization. Boo!
+
+    def __init__(self, klass, prop_name):
+        super().__init__()
+        self.klass = klass
+        self.prop_name = prop_name
+        self.property = klass.__dict__.get(prop_name)
+        self.property_old = {
+            'fget': self.property.fget,
+            'fset': self.property.fset,
+            'fdel': self.property.fdel
+        }
+        self.__patch_ref = {
+            'fget': {'old': self.property.fget, 'patcher': self.patch_get},
+            'fset': {'old': self.property.fset, 'patcher': self.patch_set},
+            'fdel': {'old': self.property.fdel, 'patcher': self.patch_del}
+        }
+
+    def patch(self):
+        option = {}
+        for key, item in self.property_old.items():
+            func = getattr(self.property, key)
+            if func is not None:
+                patcher_details = self.__patch_ref.get(key)
+                patch_function = patcher_details.get('patcher')
+                new_func = patch_function(func)
+                option[key] = new_func
+        setattr(self.klass, self.prop_name, property(**option))
+
+    def restore(self):
+        setattr(self.klass, self.prop_name, self.property)
+
+    def patch_get(self, func: Callable) -> Callable:
+        @wraps(func)
+        def inner(*args, **kwargs):
+            if self.debug:
+                print("I'm getting something")
+            return func(*args, **kwargs)
+
+        return inner
+
+    def patch_set(self, func: Callable) -> Callable:
+        @wraps(func)
+        def inner(*args, **kwargs):
+            if self.debug:
+                print("I'm setting something")
+            return func(*args, **kwargs)
+
+        return inner
+
+    def patch_del(self, func: Callable) -> Callable:
+        @wraps(func)
+        def inner(*args, **kwargs):
+            if self.debug:
+                print("I'm deleting something")
+            return func(*args, **kwargs)
+
+        return inner
+
+    def makeEntry(self, obj, *args, **kwargs) -> str:
+        pass
+
+
+class AttributeHugger(PatcherFactory):
+    # An attribute is a associated to a class and as such, the class' __getattr__ and __setattr__ should be overridden
+    # https://docs.python.org/3/reference/datamodel.html#object.__set_name__
+
+    def __init__(self, klass, exclude: list = None):
+        super().__init__()
+        self.klass = klass
+        if exclude is None:
+            exclude = []
+        self.blacklist = exclude
+        self._old_get_attr = self.klass.__getattribute__
+        self._old_set_attr = self.klass.__setattr__
+
+    def patch(self):
+        self.klass.__getattribute__ = self.patch_getattr()
+        self.klass.__setattr__ = self.patch_setattr()
+
+    def restore(self):
+        self.klass.__getattribute__ = self._old_get_attr
+        self.klass.__setattr__ = self._old_set_attr
+
+    def patch_getattr(self):
+        pass
+
+    def patch_setattr(self):
+        pass
+
+    def makeEntry(self, obj, *args, **kwargs) -> str:
+        pass
+
+
 if __name__ == "__main__":
-    
+
     class A:
         def __init__(self, a=1):
             self.a = a
@@ -368,9 +479,14 @@ if __name__ == "__main__":
         def hello(self):
             print(self.a)
 
+        @property
+        def boo(self):
+            return 'scared'
+
 
     def boo():
         return 1, 2
+
 
     f = ClassInitHugger(A)
     f.debug = True
@@ -378,19 +494,24 @@ if __name__ == "__main__":
 
     a = A(a=1)
 
-    f.restore()
-
-    ff = ClassFunctionHugger(A.hello)
+    ff = FunctionHugger(A.hello)
     ff.patch()
 
     a.hello()
+    aa = A()
 
-    ff2 = ClassFunctionHugger(boo)
+    ff2 = FunctionHugger(boo)
     ff2.patch()
 
     a_, b_ = boo()
     ff2.restore()
     a_, b_ = boo()
+
+    p = PropertyHugger(A, 'boo')
+    p.patch()
+    v = a.boo
+
+    f.restore()
 
     for line in f.log:
         print(line)
