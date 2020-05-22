@@ -1,11 +1,11 @@
 __author__ = 'github.com/wardsimon'
-__version__ = '0.0.1'
+__version__ = '0.0.2'
 
 #   Licensed under the GNU General Public License v3.0
 #   Copyright (c) of the author (github.com/wardsimon)
 #   Created: 6/3/2020.
 
-from hugger import ClassHugger0 as ClassHugger
+from hugger import ClassHugger
 
 class Foo:
 
@@ -54,8 +54,9 @@ if __name__ == '__main__':
 
     print('# Run file\n')
 
-    hugger = ClassHugger(debug=False)
-    Foo = hugger.hug(Foo)
+    hugger = ClassHugger(Foo, auto_patch=False)
+    hugger.debug = True
+    hugger.patch()
 
     boo = Foo()
     boo.bar()
@@ -77,7 +78,5 @@ if __name__ == '__main__':
 
     v = boo2.maker()
 
-    script = hugger.makeScript()
-
-    print('\n')
-    print(script)
+    print('\nAuto-gen Output\n')
+    hugger.printLog()

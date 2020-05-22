@@ -269,14 +269,19 @@ class FunctionHugger(PatcherFactory):
         if klass is None:
             klass = self._get_class_that_defined_method(func)
         self.klass = klass
+        self.staticmethod = isinstance(self.klass.__dict__[self.func_name], staticmethod)
 
     def patch(self):
+        if self.debug:
+            print(f'Patching function: "{self.func.__qualname__}"')
         if self.klass is None:
             self.func.__globals__[self.func_name] = self.patch_function()
         else:
             setattr(self.klass, self.func_name, self.patch_function())
 
     def restore(self):
+        if self.debug:
+            print(f'Restoring function: "{self.func.__qualname__}"')
         if self.klass is None:
             self.func.__globals__[self.func_name] = self.func
         else:
@@ -286,6 +291,8 @@ class FunctionHugger(PatcherFactory):
         temp = ''
         if returns is None:
             returns = []
+        if not isinstance(returns, list):
+            returns = [returns]
         for var in returns:
             index = self._get_position("return_list", var)
             temp += f'{self._store.var_ident}{index}, '
@@ -349,7 +356,10 @@ class FunctionHugger(PatcherFactory):
                     print(f"I'm {self.func.__qualname__} and have been called with {args[1:]}, {kwargs}")
                 else:
                     print(f"I'm {self.func.__qualname__} and have been called")
-            res = self.func(*args, **kwargs)
+            if self.staticmethod:
+                res = self.func(*args[1:], **kwargs)
+            else:
+                res = self.func(*args, **kwargs)
             if not skip:
                 self._append_args(*args, **kwargs)
                 self._append_result(res)
@@ -367,8 +377,12 @@ class PropertyHugger(PatcherFactory):
     def __init__(self, klass, prop_name):
         super().__init__()
         self.klass = klass
-        self.prop_name = prop_name
-        self.property = klass.__dict__.get(prop_name)
+        if isinstance(prop_name, tuple):
+            self.prop_name = prop_name[0]
+            self.property = prop_name[1]
+        else:
+            self.prop_name = prop_name
+            self.property = klass.__dict__.get(prop_name)
         self.__patch_ref = {
             'fget': {'old': self.property.fget, 'patcher': self.patch_get},
             'fset': {'old': self.property.fset, 'patcher': self.patch_set},
@@ -380,43 +394,89 @@ class PropertyHugger(PatcherFactory):
         for key, item in self.__patch_ref.items():
             func = getattr(self.property, key)
             if func is not None:
+                if self.debug:
+                    print(f'Patching property {self.klass.__name__}.{self.prop_name}')
                 patch_function: Callable = item.get('patcher')
                 new_func = patch_function(func)
                 option[key] = new_func
         setattr(self.klass, self.prop_name, property(**option))
 
     def restore(self):
+        if self.debug:
+            print(f'Restoring property {self.klass.__name__}.{self.prop_name}')
         setattr(self.klass, self.prop_name, self.property)
 
     def patch_get(self, func: Callable) -> Callable:
         @wraps(func)
         def inner(*args, **kwargs):
             if self.debug:
-                print("I'm getting something")
-            return func(*args, **kwargs)
-
+                print(f"{self.klass.__name__}.{self.prop_name} has been called with {args[1:]}, {kwargs}")
+            res = func(*args, **kwargs)
+            self._append_args(*args, **kwargs)
+            self._append_result(res)
+            self._append_log(self.makeEntry('get', res, *args, **kwargs))
+            return res
         return inner
 
     def patch_set(self, func: Callable) -> Callable:
         @wraps(func)
         def inner(*args, **kwargs):
             if self.debug:
-                print("I'm setting something")
+                print(f"{self.klass.__name__}.{self.prop_name} has been set with {args[1:]}, {kwargs}")
+            self._append_args(*args, **kwargs)
+            self._append_log(self.makeEntry('set', None, *args, **kwargs))
             return func(*args, **kwargs)
-
         return inner
 
     def patch_del(self, func: Callable) -> Callable:
         @wraps(func)
         def inner(*args, **kwargs):
             if self.debug:
-                print("I'm deleting something")
+                print(f"{self.klass.__name__}.{self.prop_name} has been deleted.")
+            self._append_log(self.makeEntry('del', None, *args, **kwargs))
             return func(*args, **kwargs)
-
         return inner
 
-    def makeEntry(self, obj, *args, **kwargs) -> str:
-        pass
+    def makeEntry(self, log_type, returns, *args, **kwargs) -> str:
+        temp = ''
+        if returns is None:
+            returns = []
+        if not isinstance(returns, list):
+            returns = [returns]
+        if log_type == 'get':
+            for var in returns:
+                if self._in_list('return_list', var):
+                    index = self._get_position("return_list", var)
+                    temp += f'{self._store.var_ident}{index}, '
+            if len(returns) > 0:
+                temp = temp[:-2]
+                temp += ' = '
+            if self._in_list('create_list', args[0]):
+                index = self._get_position("create_list", args[0])
+                temp += f'{self.klass.__name__.lower()}_{index}.{self.prop_name}'
+        elif log_type == 'set':
+            if self._in_list('create_list', args[0]):
+                index = self._get_position("create_list", args[0])
+                temp += f'{self.klass.__name__.lower()}_{index}.{self.prop_name} = '
+            args = args[1:]
+            for var in args:
+                if self._in_list('input_list', var):
+                    index = self._get_position("input_list", var)
+                    temp += f'{self._store.var_ident}{index}'
+                elif self._in_list('return_list', var):
+                    index = self._get_position("return_list", var)
+                    temp += f'{self._store.var_ident}{index}'
+                elif self._in_list('create_list', var):
+                    index = self._get_position("create_list", var)
+                    temp += f'{self.klass.__name__.lower()}_{index}'
+                else:
+                    if isinstance(var, str):
+                        var = '"' + var + '"'
+                    temp += f'{var}'
+        else:
+            print(f'{log_type} is not implemented yet. Sorry')
+        temp += '\n'
+        return temp
 
 
 class AttributeHugger(PatcherFactory):
@@ -441,19 +501,22 @@ class AttributeHugger(PatcherFactory):
         self.klass.__setattr__ = self._old_set_attr
 
     def patch_getattr(self):
-        fun = self._old_get_attr
+        func = self._old_get_attr
 
-        @wraps(fun)
+        @wraps(func)
         def inner(*args, **kwargs):
             if args[1] == '__dict__':
-                return fun(*args, **kwargs)
+                return func(*args, **kwargs)
             if not self.checker(args[0], args[1]):
-                return fun(*args, **kwargs)
+                return func(*args, **kwargs)
             if isinstance(args[0].__dict__[args[1]], Callable):
-                return fun(*args, **kwargs)
+                return func(*args, **kwargs)
             if args[1][0] != '_' and self.debug:
                 print(f"I''m getting {args[0]}.{args[1]}")
-            res = fun(*args, **kwargs)
+            res = func(*args, **kwargs)
+            self._append_args(*args, **kwargs)
+            self._append_result(res)
+            self._append_log(self.makeEntry('get', res, *args, **kwargs))
             return res
 
         return inner
@@ -471,12 +534,52 @@ class AttributeHugger(PatcherFactory):
                 return fun(*args, **kwargs)
             if args[1][0] != '_' and self.debug:
                 print(f"I''m setting {args[0]}.{args[1]} to {args[2]}")
+            self._append_args(*args, **kwargs)
+            self._append_log(self.makeEntry('set', None, *args, **kwargs))
             return fun(*args, **kwargs)
 
         return inner
 
-    def makeEntry(self, obj, *args, **kwargs) -> str:
-        pass
+    def makeEntry(self, log_type: str, returns: Tuple, *args, **kwargs) -> str:
+        temp = ''
+        if returns is None:
+            returns = []
+        if not isinstance(returns, list):
+            returns = [returns]
+        if log_type == 'get':
+            for var in returns:
+                if self._in_list('return_list', var):
+                    index = self._get_position("return_list", var)
+                    temp += f'{self._store.var_ident}{index}, '
+            if len(returns) > 0:
+                temp = temp[:-2]
+                temp += ' = '
+            if self._in_list('create_list', args[0]):
+                index = self._get_position("create_list", args[0])
+                temp += f'{self.klass.__name__.lower()}_{index}.{args[1]}'
+        elif log_type == 'set':
+            if self._in_list('create_list', args[0]):
+                index = self._get_position("create_list", args[0])
+                temp += f'{self.klass.__name__.lower()}_{index}.{args[1]} = '
+            args = args[2:]
+            for var in args:
+                if self._in_list('input_list', var):
+                    index = self._get_position("input_list", var)
+                    temp += f'{self._store.var_ident}{index}'
+                elif self._in_list('return_list', var):
+                    index = self._get_position("return_list", var)
+                    temp += f'{self._store.var_ident}{index}'
+                elif self._in_list('create_list', var):
+                    index = self._get_position("create_list", var)
+                    temp += f'{self.klass.__name__.lower()}_{index}'
+                else:
+                    if isinstance(var, str):
+                        var = '"' + var + '"'
+                    temp += f'{var}'
+        else:
+            print(f'{log_type} is not implemented yet. Sorry')
+        temp += '\n'
+        return temp
 
     @staticmethod
     def checker(this_fun, this_item):
@@ -488,14 +591,53 @@ class ClassFunctionHugger(PatcherFactory):
     def __init__(self, klass: classmethod):
         super().__init__()
         self.klass = klass
-        self.functions_list = inspect.getmembers(self.klass, predicate=inspect.isfunction)
-        self.__results = [self.__def_patch_res() for i in enumerate(self.functions_list)]
+        functions_list = inspect.getmembers(self.klass, predicate=inspect.isfunction)
+        self.functions_list = []
+        self.__results = []
+        for fun in functions_list:
+            # Override the private functions we've assigned
+            if fun[0].startswith('__'):
+                continue
+            self.functions_list.append(fun)
+            self.__results.append(self.__def_patch_res())
 
     def patch(self):
         i = 0
         for func in self.functions_list:
+            self.__results[i]['name'] = func[0]
+            self.__results[i]['result'] = FunctionHugger(func[1], klass=self.klass)
+            self.__results[i]['patched'] = True
+            self.__results[i]['result'].patch()
+            i += 1
+
+    def restore(self):
+        for hugged_func in self.__results:
+            if hugged_func["patched"]:
+                hugged_func['result'].restore()
+                hugged_func["patched"] = False
+
+    @staticmethod
+    def __def_patch_res():
+        return {
+                'name': None,
+                'result': None,
+                'patched': False
+            }
+
+
+class ClassPropertyHugger(PatcherFactory):
+
+    def __init__(self, klass: classmethod):
+        super().__init__()
+        self.klass = klass
+        self.property_list = inspect.getmembers(self.klass, predicate=lambda o: isinstance(o, property))
+        self.__results = [self.__def_patch_res() for i in enumerate(self.property_list)]
+
+    def patch(self):
+        i = 0
+        for func in self.property_list:
             self.__results[i]['name'] = func
-            self.__results[i]['result'] = FunctionHugger(getattr(self.klass, func), klass=self.klass)
+            self.__results[i]['result'] = PropertyHugger(self.klass, func)
             self.__results[i]['patched'] = True
             self.__results[i]['result'].patch()
             i += 1
@@ -512,6 +654,3 @@ class ClassFunctionHugger(PatcherFactory):
                 'result': None,
                 'patched': False
             }
-
-
-
