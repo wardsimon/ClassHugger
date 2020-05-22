@@ -12,33 +12,15 @@ from collections.abc import Callable
 from abc import ABCMeta, abstractmethod
 from functools import wraps
 from types import MethodType
+from hugger.Borg import Borg
+
+borg = Borg()
 
 
-class Borg:
-    __log = []
-    __debug = False
-    __var_ident = 'var_'
-    __ret_ident = 'ret_'
-
-    # TODO These should be classed out
-    __create_list = []
-    __unique_args = []
-    __unique_rets = []
+class Hugger(metaclass=ABCMeta):
 
     def __init__(self):
-        self.log = self.__log
-        self.debug = self.__debug
-        self.create_list = self.__create_list
-        self.unique_args = self.__unique_args
-        self.unique_rets = self.__unique_rets
-        self.var_ident = self.__var_ident
-        self.ret_ident = self.__ret_ident
-
-
-class PatcherFactory(metaclass=ABCMeta):
-
-    def __init__(self):
-        self._store = Borg()
+        self._store = borg
 
     @property
     def log(self) -> list:
@@ -60,9 +42,11 @@ class PatcherFactory(metaclass=ABCMeta):
     def restore(self):
         pass
 
-    @abstractmethod
-    def makeEntry(self, obj, *args, **kwargs) -> str:
-        pass
+
+class PatcherFactory(Hugger, metaclass=ABCMeta):
+
+    def __init__(self):
+        super().__init__()
 
     @staticmethod
     def is_mutable(arg) -> bool:
@@ -203,7 +187,7 @@ class ClassInitHugger(PatcherFactory):
     def __init__(self, klass: classmethod):
         super().__init__()
         self.klass = klass
-        self.old_init = klass.__init__
+        self.old_init: Callable = klass.__init__
 
     def patch(self):
         if self.debug:
@@ -278,11 +262,13 @@ class ClassInitHugger(PatcherFactory):
 
 class FunctionHugger(PatcherFactory):
 
-    def __init__(self, func: callable):
+    def __init__(self, func: Callable, klass: classmethod = None):
         super().__init__()
         self.func = func
         self.func_name = func.__name__
-        self.klass = self._get_class_that_defined_method(func)
+        if klass is None:
+            klass = self._get_class_that_defined_method(func)
+        self.klass = klass
 
     def patch(self):
         if self.klass is None:
@@ -383,11 +369,6 @@ class PropertyHugger(PatcherFactory):
         self.klass = klass
         self.prop_name = prop_name
         self.property = klass.__dict__.get(prop_name)
-        self.property_old = {
-            'fget': self.property.fget,
-            'fset': self.property.fset,
-            'fdel': self.property.fdel
-        }
         self.__patch_ref = {
             'fget': {'old': self.property.fget, 'patcher': self.patch_get},
             'fset': {'old': self.property.fset, 'patcher': self.patch_set},
@@ -396,11 +377,10 @@ class PropertyHugger(PatcherFactory):
 
     def patch(self):
         option = {}
-        for key, item in self.property_old.items():
+        for key, item in self.__patch_ref.items():
             func = getattr(self.property, key)
             if func is not None:
-                patcher_details = self.__patch_ref.get(key)
-                patch_function = patcher_details.get('patcher')
+                patch_function: Callable = item.get('patcher')
                 new_func = patch_function(func)
                 option[key] = new_func
         setattr(self.klass, self.prop_name, property(**option))
@@ -461,57 +441,77 @@ class AttributeHugger(PatcherFactory):
         self.klass.__setattr__ = self._old_set_attr
 
     def patch_getattr(self):
-        pass
+        fun = self._old_get_attr
+
+        @wraps(fun)
+        def inner(*args, **kwargs):
+            if args[1] == '__dict__':
+                return fun(*args, **kwargs)
+            if not self.checker(args[0], args[1]):
+                return fun(*args, **kwargs)
+            if isinstance(args[0].__dict__[args[1]], Callable):
+                return fun(*args, **kwargs)
+            if args[1][0] != '_' and self.debug:
+                print(f"I''m getting {args[0]}.{args[1]}")
+            res = fun(*args, **kwargs)
+            return res
+
+        return inner
 
     def patch_setattr(self):
-        pass
+        fun = self._old_set_attr
+
+        @wraps(fun)
+        def inner(*args, **kwargs):
+            if args[1] == '__dict__':
+                return fun(*args, **kwargs)
+            if not self.checker(args[0], args[1]):
+                return fun(*args, **kwargs)
+            if isinstance(args[0].__dict__[args[1]], Callable):
+                return fun(*args, **kwargs)
+            if args[1][0] != '_' and self.debug:
+                print(f"I''m setting {args[0]}.{args[1]} to {args[2]}")
+            return fun(*args, **kwargs)
+
+        return inner
 
     def makeEntry(self, obj, *args, **kwargs) -> str:
         pass
 
-
-if __name__ == "__main__":
-
-    class A:
-        def __init__(self, a=1):
-            self.a = a
-
-        def hello(self):
-            print(self.a)
-
-        @property
-        def boo(self):
-            return 'scared'
+    @staticmethod
+    def checker(this_fun, this_item):
+        return this_item in this_fun.__dict__.keys()
 
 
-    def boo():
-        return 1, 2
+class ClassFunctionHugger(PatcherFactory):
+
+    def __init__(self, klass: classmethod):
+        super().__init__()
+        self.klass = klass
+        self.functions_list = inspect.getmembers(self.klass, predicate=inspect.isfunction)
+        self.__results = [self.__def_patch_res() for i in enumerate(self.functions_list)]
+
+    def patch(self):
+        i = 0
+        for func in self.functions_list:
+            self.__results[i]['name'] = func
+            self.__results[i]['result'] = FunctionHugger(getattr(self.klass, func), klass=self.klass)
+            self.__results[i]['patched'] = True
+            self.__results[i]['result'].patch()
+            i += 1
+
+    def restore(self):
+        for hugged_func in self.__results:
+            hugged_func['result'].restore()
+            hugged_func["patched"] = False
+
+    @staticmethod
+    def __def_patch_res():
+        return {
+                'name': None,
+                'result': None,
+                'patched': False
+            }
 
 
-    f = ClassInitHugger(A)
-    f.debug = True
-    f.patch()
 
-    a = A(a=1)
-
-    ff = FunctionHugger(A.hello)
-    ff.patch()
-
-    a.hello()
-    aa = A()
-
-    ff2 = FunctionHugger(boo)
-    ff2.patch()
-
-    a_, b_ = boo()
-    ff2.restore()
-    a_, b_ = boo()
-
-    p = PropertyHugger(A, 'boo')
-    p.patch()
-    v = a.boo
-
-    f.restore()
-
-    for line in f.log:
-        print(line)
